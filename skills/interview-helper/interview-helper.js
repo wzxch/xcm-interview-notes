@@ -1,9 +1,51 @@
 /**
  * Interview Helper - 面试学习助手
- * 帮助整理面试知识点，自动生成结构化笔记并保存到 GitHub
+ * 帮助整理面试知识点，自动生成结构化笔记并保存到本地 Git 仓库
  */
 
-const github = require('../github-notes/github-notes');
+// 尝试加载 git-repo-manager 和配置
+let git;
+let config;
+let github;
+
+try {
+  git = require('../git-repo-manager/git-repo-manager.js');
+  config = require('../git-repo-manager/config.json');
+  github = require('../github-notes/github-notes.js');
+} catch (error) {
+  console.error('Failed to load git-repo-manager or config:', error.message);
+}
+
+// 配置检查
+function checkConfig() {
+  if (!git || !config) {
+    return {
+      valid: false,
+      message: '❌ 配置错误：无法加载 git-repo-manager 或 config.json\n\n' +
+               '请先配置 git-repo-manager：\n' +
+               '1. 确保 /skills/git-repo-manager/config.json 存在\n' +
+               '2. 配置内容示例：\n' +
+               '   {\n' +
+               '     "repoUrl": "https://github.com/username/repo",\n' +
+               '     "localPath": "/path/to/local/repo",\n' +
+               '     "token": "your-github-token"\n' +
+               '   }'
+    };
+  }
+  
+  if (!config.repoUrl || !config.localPath) {
+    return {
+      valid: false,
+      message: '❌ 配置错误：config.json 缺少必要字段\n\n' +
+               '需要配置：\n' +
+               '- repoUrl: 远程仓库地址\n' +
+               '- localPath: 本地仓库路径\n' +
+               '- token: GitHub 访问令牌（可选）'
+    };
+  }
+  
+  return { valid: true };
+}
 
 // 会话状态存储（简单内存存储，实际使用可能需要持久化）
 const sessions = new Map();
@@ -93,41 +135,60 @@ function getFilePath(topic) {
  * @returns {Promise<Object>} 响应对象
  */
 async function startInterview(topic, sessionId) {
-  if (!topic || topic.trim() === '') {
+  // 检查配置
+  const configCheck = checkConfig();
+  if (!configCheck.valid) {
     return {
       success: false,
-      message: '请提供主题名称，例如：/interview JVM垃圾回收'
+      message: configCheck.message
     };
   }
 
-  // 保存当前会话主题
-  sessions.set(sessionId, {
-    topic: topic.trim(),
-    startTime: new Date().toISOString(),
-    messages: []
-  });
-
-  // 检查是否已有笔记
-  const filePath = getFilePath(topic);
-  const exists = await github.fileExists(filePath);
-
-  let message = `开始讨论主题：**${topic}**\n\n`;
-  
-  if (exists) {
-    message += `📚 该主题已有笔记，可以使用 "/review ${topic}" 查看已有内容。\n`;
-    message += `💡 讨论结束后输入"保存"将更新笔记。`;
-  } else {
-    message += `📝 这是一个新主题。\n`;
-    message += `💡 讨论结束后输入"保存"将创建新笔记。`;
+  if (!topic || topic.trim() === '') {
+    return {
+      success: false,
+      message: '请提供主题名称，例如：/inter-start JVM垃圾回收'
+    };
   }
 
-  return {
-    success: true,
-    message: message,
-    topic: topic,
-    filePath: filePath,
-    exists: exists
-  };
+  try {
+    // 确保仓库存在
+    await git.ensureRepo(config.localPath, config.repoUrl, config.token);
+
+    // 保存当前会话主题
+    sessions.set(sessionId, {
+      topic: topic.trim(),
+      startTime: new Date().toISOString(),
+      messages: []
+    });
+
+    // 检查是否已有笔记
+    const filePath = getFilePath(topic);
+    const exists = await git.fileExists(config.localPath, filePath);
+
+    let message = `开始讨论主题：**${topic}**\n\n`;
+    
+    if (exists) {
+      message += `📚 该主题已有笔记，可以使用 "/inter-review ${topic}" 查看已有内容。\n`;
+      message += `💡 讨论结束后输入"/inter-save"将更新笔记。`;
+    } else {
+      message += `📝 这是一个新主题。\n`;
+      message += `💡 讨论结束后输入"/inter-save"将创建新笔记。`;
+    }
+
+    return {
+      success: true,
+      message: message,
+      topic: topic,
+      filePath: filePath,
+      exists: exists
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `启动讨论失败：${error.message}`
+    };
+  }
 }
 
 /**
@@ -314,8 +375,8 @@ function extractPitfalls(qaPairs) {
 function simplifyQuestion(question) {
   // 去除命令前缀
   let simplified = question
-    .replace(/^\/(interview|review)\s*/i, '')
-    .replace(/^保存\s*/i, '')
+    .replace(/^\/(inter-start|inter-review)\s*/i, '')
+    .replace(/^\/inter-save\s*/i, '')
     .trim();
   
   // 限制长度
@@ -353,12 +414,21 @@ function extractKeyPoint(answer) {
  * @returns {Promise<Object>} 响应对象
  */
 async function saveNotes(sessionId, sessionHistory = null) {
+  // 检查配置
+  const configCheck = checkConfig();
+  if (!configCheck.valid) {
+    return {
+      success: false,
+      message: configCheck.message
+    };
+  }
+
   const session = sessions.get(sessionId);
   
   if (!session && !sessionHistory) {
     return {
       success: false,
-      message: '没有正在进行的讨论，请先使用 "/interview <主题>" 开始讨论'
+      message: '没有正在进行的讨论，请先使用 "/inter-start <主题>" 开始讨论'
     };
   }
 
@@ -373,38 +443,63 @@ async function saveNotes(sessionId, sessionHistory = null) {
   }
 
   try {
-    // 1. 检查是否已有笔记
-    const filePath = getFilePath(topic);
-    const exists = await github.fileExists(filePath);
+    // 设置环境变量供 github-notes 使用
+    process.env.GITHUB_TOKEN = config.token;
+    process.env.GITHUB_REPO = config.repoUrl.replace('https://github.com/', '');
+    process.env.GITHUB_USERNAME = config.repoUrl.split('/')[3];
+    process.env.GITHUB_AUTHOR_NAME = 'xcm_kimi_claw';
+
+    // 1. ensureRepo 确保本地仓库存在
+    await git.ensureRepo(config.localPath, config.repoUrl, config.token);
     
-    // 2. 获取已有内容（如果是更新）
+    // 2. pull 最新代码
+    await git.pull(config.localPath);
+    
+    // 3. 检查文件是否存在（本地）
+    const filePath = getFilePath(topic);
+    const exists = await git.fileExists(config.localPath, filePath);
+    
+    // 4. 获取已有内容（如果是更新）
     let existingContent = null;
     if (exists) {
-      existingContent = await github.readFile(filePath);
+      existingContent = await git.readFile(config.localPath, filePath);
     }
 
-    // 3. 生成 Markdown
+    // 5. 生成 Markdown
     const markdown = generateMarkdown(topic, messages, existingContent);
 
-    // 4. 创建临时分支
+    // 6. 使用 review 逻辑自检内容
+    const selfReviewResult = await selfReviewContent(topic, markdown);
+
+    // 7. 创建临时分支（本地）
     const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const branchName = `note-${topicToFilename(topic)}-${timestamp}`;
-    
-    await github.createBranch(branchName);
+    await git.createBranch(config.localPath, branchName, 'main');
+    await git.checkout(config.localPath, branchName);
 
-    // 5. 推送文件
+    // 8. 写入文件（本地）
+    await git.writeFile(config.localPath, filePath, markdown);
+
+    // 9. commit（本地）
     const commitMessage = exists 
       ? `Update: ${topic} - ${new Date().toLocaleDateString('zh-CN')}`
       : `Add: ${topic} - ${new Date().toLocaleDateString('zh-CN')}`;
-    
-    await github.createOrUpdateFile(filePath, markdown, commitMessage, branchName);
+    await git.commit(config.localPath, commitMessage, [filePath]);
 
-    // 6. 创建 PR
+    // 10. push 到远程临时分支
+    await git.push(config.localPath, branchName);
+
+    // 11. 切回 main 分支
+    await git.checkout(config.localPath, 'main');
+
+    // 12. 创建 PR（使用 github-notes）
     const prTitle = `${exists ? 'Update' : 'Add'}：${topic}-${new Date().toLocaleDateString('zh-CN').replace(/\//g, '')}`;
     const prBody = `## ${exists ? '更新' : '添加'}笔记：${topic}\n\n` +
                    `### 变更内容\n` +
                    `- ${exists ? '更新' : '新增'} ${filePath}\n` +
                    `- 基于 ${messages.length} 条对话记录整理\n\n` +
+                   `### 自检结果\n` +
+                   `${selfReviewResult.summary}\n\n` +
                    `### 笔记摘要\n` +
                    `- 主题：${topic}\n` +
                    `- 分类：${getTopicCategory(topic)}\n` +
@@ -412,15 +507,16 @@ async function saveNotes(sessionId, sessionHistory = null) {
     
     const pr = await github.createPullRequest(branchName, prTitle, prBody);
 
-    // 7. 清理会话
+    // 13. 清理会话
     sessions.delete(sessionId);
 
     return {
       success: true,
-      message: `✅ 笔记已整理并创建 PR\n\n📄 文件：${filePath}\n🔗 PR 链接：${pr.html_url}`,
-      prUrl: pr.html_url,
+      message: `✅ 笔记已保存并创建 PR\n\n📄 文件：${filePath}\n📝 操作：${exists ? '更新' : '新增'}\n🔍 自检：${selfReviewResult.summary}\n🔗 PR: ${pr?.html_url || '创建成功'}`,
       filePath: filePath,
-      branchName: branchName
+      isUpdate: exists,
+      prUrl: pr?.html_url,
+      selfReview: selfReviewResult
     };
 
   } catch (error) {
@@ -432,26 +528,71 @@ async function saveNotes(sessionId, sessionHistory = null) {
 }
 
 /**
+ * 技术专家 Review 提示词
+ */
+const REVIEWER_PROMPT = `你是一名资深技术专家，拥有10年以上后端开发经验，精通Java、JVM、MySQL、Redis、消息队列等核心技术。
+
+你的任务是以严格、挑剔的视角审查以下技术文档，帮助发现潜在问题：
+
+## 审查维度
+1. **技术准确性**：概念、原理、数据是否有错误？
+2. **表述严谨性**：描述是否过于绝对？是否有歧义？
+3. **完整性**：关键细节是否遗漏？边界条件是否说明？
+4. **时效性**：内容是否过时？是否有新版本的变化未提及？
+5. **常见误区**：是否忽略了初学者容易犯的错误？
+
+## 输出格式
+请以以下结构输出审查结果：
+
+### ✅ 整体评价
+简要评价文档质量（优秀/良好/需改进）
+
+### 🔍 发现的问题
+按严重程度列出发现的问题：
+- **严重**：技术错误、概念混淆
+- **警告**：表述不严谨、可能误导
+- **建议**：可以补充的细节、优化建议
+
+### 📌 修正建议
+针对每个问题给出具体的修改建议
+
+---
+现在开始审查以下内容：`;
+
+/**
  * 处理 /review 命令
  * @param {string} topic - 主题名称
  * @returns {Promise<Object>} 响应对象
  */
 async function reviewNotes(topic) {
+  // 检查配置
+  const configCheck = checkConfig();
+  if (!configCheck.valid) {
+    return {
+      success: false,
+      message: configCheck.message
+    };
+  }
+
   if (!topic || topic.trim() === '') {
     return {
       success: false,
-      message: '请提供主题名称，例如：/review JVM垃圾回收'
+      message: '请提供主题名称，例如：/inter-review JVM垃圾回收'
     };
   }
 
   try {
+    // 确保仓库存在并拉取最新内容
+    await git.ensureRepo(config.localPath, config.repoUrl, config.token);
+    await git.pull(config.localPath);
+    
     const filePath = getFilePath(topic);
-    const content = await github.readFile(filePath);
+    const content = await git.readFile(config.localPath, filePath);
 
     if (content === null) {
       return {
         success: false,
-        message: `未找到主题 "${topic}" 的笔记。\n\n可以使用 "/interview ${topic}" 开始新的讨论。`
+        message: `未找到主题 "${topic}" 的笔记。\n\n可以使用 "/inter-start ${topic}" 开始新的讨论。`
       };
     }
 
@@ -459,7 +600,8 @@ async function reviewNotes(topic) {
       success: true,
       message: `📚 **${topic}** 的笔记内容：\n\n${content}`,
       topic: topic,
-      content: content
+      content: content,
+      reviewPrompt: REVIEWER_PROMPT
     };
 
   } catch (error) {
@@ -471,28 +613,227 @@ async function reviewNotes(topic) {
 }
 
 /**
- * 处理 /list 命令
+ * 自检生成的笔记内容
+ * @param {string} topic - 主题名称
+ * @param {string} content - 笔记内容
+ * @returns {Promise<Object>} 自检结果
+ */
+async function selfReviewContent(topic, content) {
+  // 基础自检：检查常见错误模式
+  const issues = [];
+  
+  // 检查空内容
+  if (!content || content.trim().length < 100) {
+    issues.push({ severity: '严重', issue: '内容过短，可能缺少实质内容' });
+  }
+  
+  // 检查是否有核心概念部分
+  if (!content.includes('## 核心概念')) {
+    issues.push({ severity: '警告', issue: '缺少核心概念部分' });
+  }
+  
+  // 检查是否有占位符
+  if (content.includes('待补充') || content.includes('TODO')) {
+    issues.push({ severity: '建议', issue: '存在待补充内容标记' });
+  }
+  
+  // 检查代码块格式
+  const codeBlockMatches = content.match(/```/g);
+  if (codeBlockMatches && codeBlockMatches.length % 2 !== 0) {
+    issues.push({ severity: '严重', issue: '代码块格式不完整（可能缺少闭合）' });
+  }
+  
+  // 生成自检摘要
+  const criticalCount = issues.filter(i => i.severity === '严重').length;
+  const warningCount = issues.filter(i => i.severity === '警告').length;
+  const suggestionCount = issues.filter(i => i.severity === '建议').length;
+  
+  let summary = '';
+  if (criticalCount === 0 && warningCount === 0 && suggestionCount === 0) {
+    summary = '✅ 基础检查通过';
+  } else {
+    const parts = [];
+    if (criticalCount > 0) parts.push(`${criticalCount}个严重问题`);
+    if (warningCount > 0) parts.push(`${warningCount}个警告`);
+    if (suggestionCount > 0) parts.push(`${suggestionCount}个建议`);
+    summary = `⚠️ 发现 ${parts.join('、')}`;
+  }
+  
+  return {
+    summary,
+    issues,
+    reviewPrompt: REVIEWER_PROMPT + '\n\n' + content
+  };
+}
+
+/**
+ * 处理 /search 命令 - 搜索主题和内容
+ * @param {string} keyword - 搜索关键词
  * @returns {Promise<Object>} 响应对象
  */
-async function listTopics() {
+async function searchNotes(keyword) {
+  // 检查配置
+  const configCheck = checkConfig();
+  if (!configCheck.valid) {
+    return {
+      success: false,
+      message: configCheck.message
+    };
+  }
+
+  if (!keyword || keyword.trim() === '') {
+    return {
+      success: false,
+      message: '请提供搜索关键词，例如：/inter-search 垃圾回收'
+    };
+  }
+
   try {
-    const files = await github.listAllFiles();
+    // 确保仓库存在并拉取最新内容
+    await git.ensureRepo(config.localPath, config.repoUrl, config.token);
+    await git.pull(config.localPath);
+    
+    const searchTerm = keyword.trim().toLowerCase();
+    const files = await git.listFiles(config.localPath);
     
     if (files.length === 0) {
       return {
         success: true,
-        message: '还没有保存任何笔记。\n\n使用 "/interview <主题>" 开始第一个讨论吧！'
+        message: '还没有保存任何笔记。\n\n使用 "/inter-start <主题>" 开始第一个讨论吧！'
+      };
+    }
+
+    // 搜索结果
+    const results = [];
+    
+    for (const file of files) {
+      const filename = file.split('/').pop().replace('.md', '').toLowerCase();
+      const content = await git.readFile(config.localPath, file);
+      const contentLower = (content || '').toLowerCase();
+      
+      // 检查文件名匹配
+      const nameMatch = filename.includes(searchTerm);
+      // 检查内容匹配
+      const contentMatch = contentLower.includes(searchTerm);
+      
+      if (nameMatch || contentMatch) {
+        // 提取匹配片段
+        let snippet = '';
+        if (contentMatch && content) {
+          const idx = contentLower.indexOf(searchTerm);
+          const start = Math.max(0, idx - 50);
+          const end = Math.min(content.length, idx + searchTerm.length + 100);
+          snippet = content.substring(start, end).replace(/\n/g, ' ');
+          if (start > 0) snippet = '...' + snippet;
+          if (end < content.length) snippet = snippet + '...';
+        }
+        
+        results.push({
+          file: file,
+          filename: file.split('/').pop().replace('.md', ''),
+          category: file.split('/')[0],
+          nameMatch,
+          contentMatch,
+          snippet
+        });
+      }
+    }
+    
+    // 排序：文件名匹配优先
+    results.sort((a, b) => {
+      if (a.nameMatch && !b.nameMatch) return -1;
+      if (!a.nameMatch && b.nameMatch) return 1;
+      return 0;
+    });
+
+    if (results.length === 0) {
+      return {
+        success: true,
+        message: `未找到包含 "${keyword}" 的笔记。\n\n可以尝试：\n- 使用更简单的关键词\n- 使用 "/inter-start ${keyword}" 开始新的讨论`,
+        keyword: keyword,
+        results: []
+      };
+    }
+
+    let message = `🔍 搜索 "${keyword}" 的结果（共 ${results.length} 条）：\n\n`;
+    
+    // 按分类分组
+    const groups = {};
+    for (const r of results) {
+      if (!groups[r.category]) {
+        groups[r.category] = [];
+      }
+      groups[r.category].push(r);
+    }
+    
+    for (const [dir, items] of Object.entries(groups)) {
+      message += `**${dir}/**\n`;
+      for (const item of items) {
+        const matchType = item.nameMatch ? '📄' : '📝';
+        message += `  ${matchType} ${item.filename}`;
+        if (item.snippet) {
+          message += `\n     ${item.snippet}`;
+        }
+        message += '\n';
+      }
+      message += '\n';
+    }
+    
+    message += `💡 使用 "/inter-review <主题>" 查看完整内容`;
+
+    return {
+      success: true,
+      message: message,
+      keyword: keyword,
+      results: results
+    };
+
+  } catch (error) {
+    return {
+      success: false,
+      message: `搜索失败：${error.message}`
+    };
+  }
+}
+
+/**
+ * 处理 /list 命令 - 列出所有主题（保留向后兼容）
+ * @returns {Promise<Object>} 响应对象
+ */
+async function listTopics() {
+  // 检查配置
+  const configCheck = checkConfig();
+  if (!configCheck.valid) {
+    return {
+      success: false,
+      message: configCheck.message
+    };
+  }
+
+  try {
+    // 确保仓库存在并拉取最新内容
+    await git.ensureRepo(config.localPath, config.repoUrl, config.token);
+    await git.pull(config.localPath);
+    
+    const files = await git.listFiles(config.localPath);
+    
+    if (files.length === 0) {
+      return {
+        success: true,
+        message: '还没有保存任何笔记。\n\n使用 "/inter-start <主题>" 开始第一个讨论吧！'
       };
     }
 
     // 按目录分组
     const groups = {};
     for (const file of files) {
-      const dir = file.path.split('/')[0];
+      const dir = file.split('/')[0];
       if (!groups[dir]) {
         groups[dir] = [];
       }
-      groups[dir].push(file.name.replace('.md', ''));
+      // 提取文件名（不含扩展名）
+      const filename = file.split('/').pop().replace('.md', '');
+      groups[dir].push(filename);
     }
 
     let message = '📚 已保存的主题列表：\n\n';
@@ -510,9 +851,9 @@ async function listTopics() {
       success: true,
       message: message,
       topics: files.map(f => ({
-        name: f.name.replace('.md', ''),
-        path: f.path,
-        category: f.path.split('/')[0]
+        name: f.split('/').pop().replace('.md', ''),
+        path: f,
+        category: f.split('/')[0]
       }))
     };
 
@@ -546,10 +887,12 @@ module.exports = {
   saveNotes,
   reviewNotes,
   listTopics,
+  searchNotes,
   addMessage,
   getSession,
   clearSession,
   getFilePath,
   getTopicCategory,
-  generateMarkdown
+  generateMarkdown,
+  selfReviewContent
 };
