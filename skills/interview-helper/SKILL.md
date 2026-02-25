@@ -15,18 +15,18 @@ export GITHUB_AUTHOR_NAME="xcm_kimi_claw"
 
 ## 命令列表
 
-### /interview <主题>
+### /inter-start <主题>
 开始一个新的主题讨论。
 
 示例：
 ```
-/interview JVM垃圾回收
+/inter-start JVM垃圾回收
 ```
 
 系统会自动检查是否已有该主题的笔记，如果有会提示查看。
 
-### 保存
-在讨论结束后，输入"保存"将当前主题的内容整理成笔记。
+### /inter-save
+在讨论结束后，输入"/inter-save"将当前主题的内容整理成笔记。
 
 流程：
 1. 从对话历史中提取当前主题的讨论
@@ -36,15 +36,15 @@ export GITHUB_AUTHOR_NAME="xcm_kimi_claw"
 5. 创建 Pull Request
 6. 返回 PR 链接
 
-### /review <主题>
+### /inter-review <主题>
 查看已有主题的笔记内容。
 
 示例：
 ```
-/review JVM垃圾回收
+/inter-review JVM垃圾回收
 ```
 
-### /list
+### /inter-list
 列出所有已保存的主题。
 
 ## 文件结构
@@ -74,14 +74,14 @@ xcm-interview-notes/
 
 1. **开始讨论**
    ```
-   /interview Redis持久化
+   /inter-start Redis持久化
    ```
 
 2. **进行问答讨论**（多轮对话）
 
 3. **保存笔记**
    ```
-   保存
+   /inter-save
    ```
    系统会返回 PR 链接，如：
    ```
@@ -90,12 +90,12 @@ xcm-interview-notes/
 
 4. **后续复习**
    ```
-   /review Redis持久化
+   /inter-review Redis持久化
    ```
 
 5. **查看所有主题**
    ```
-   /list
+   /inter-list
    ```
 
 ## 笔记格式
