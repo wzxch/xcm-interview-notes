@@ -1,7 +1,10 @@
 /**
  * Interview Helper - 面试学习助手
- * 帮助整理面试知识点，自动生成结构化笔记并保存到本地 Git 仓库
+ * 帮助整理面试知识点，自动生成结构化笔记并通过 PR 模式保存到 GitHub
  */
+
+const fs = require('fs');
+const path = require('path');
 
 // 尝试加载 git-repo-manager 和配置
 let git;
@@ -47,7 +50,7 @@ function checkConfig() {
   return { valid: true };
 }
 
-// 会话状态存储（简单内存存储，实际使用可能需要持久化）
+// 会话状态存储
 const sessions = new Map();
 
 /**
@@ -113,8 +116,8 @@ function getTopicCategory(topic) {
 function topicToFilename(topic) {
   return topic
     .toLowerCase()
-    .replace(/[^\w\u4e00-\u9fa5]+/g, '-')  // 非字母数字中文转为 -
-    .replace(/^-+|-+$/g, '');              // 去除首尾 -
+    .replace(/[^\w\u4e00-\u9fa5]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 /**
@@ -129,19 +132,15 @@ function getFilePath(topic) {
 }
 
 /**
- * 处理 /interview 命令
+ * 处理 /inter-start 命令
  * @param {string} topic - 主题名称
  * @param {string} sessionId - 会话 ID
  * @returns {Promise<Object>} 响应对象
  */
 async function startInterview(topic, sessionId) {
-  // 检查配置
   const configCheck = checkConfig();
   if (!configCheck.valid) {
-    return {
-      success: false,
-      message: configCheck.message
-    };
+    return { success: false, message: configCheck.message };
   }
 
   if (!topic || topic.trim() === '') {
@@ -152,17 +151,14 @@ async function startInterview(topic, sessionId) {
   }
 
   try {
-    // 确保仓库存在
     await git.ensureRepo(config.localPath, config.repoUrl, config.token);
 
-    // 保存当前会话主题
     sessions.set(sessionId, {
       topic: topic.trim(),
       startTime: new Date().toISOString(),
       messages: []
     });
 
-    // 检查是否已有笔记
     const filePath = getFilePath(topic);
     const exists = await git.fileExists(config.localPath, filePath);
 
@@ -170,10 +166,10 @@ async function startInterview(topic, sessionId) {
     
     if (exists) {
       message += `📚 该主题已有笔记，可以使用 "/inter-review ${topic}" 查看已有内容。\n`;
-      message += `💡 讨论结束后输入"/inter-save"将更新笔记。`;
+      message += `💡 讨论结束后输入"/inter-summary"生成摘要，然后用"/inter-save <文件路径>"保存。`;
     } else {
       message += `📝 这是一个新主题。\n`;
-      message += `💡 讨论结束后输入"/inter-save"将创建新笔记。`;
+      message += `💡 讨论结束后输入"/inter-summary"生成摘要，然后用"/inter-save <文件路径>"保存。`;
     }
 
     return {
@@ -184,122 +180,21 @@ async function startInterview(topic, sessionId) {
       exists: exists
     };
   } catch (error) {
-    return {
-      success: false,
-      message: `启动讨论失败：${error.message}`
-    };
+    return { success: false, message: `启动讨论失败：${error.message}` };
   }
 }
 
 /**
  * 添加消息到会话
  * @param {string} sessionId - 会话 ID
- * @param {string} role - 角色（user/assistant）
+ * @param {string} role - 角色
  * @param {string} content - 消息内容
  */
 function addMessage(sessionId, role, content) {
   const session = sessions.get(sessionId);
   if (session) {
-    session.messages.push({
-      role,
-      content,
-      time: new Date().toISOString()
-    });
+    session.messages.push({ role, content, time: new Date().toISOString() });
   }
-}
-
-/**
- * 从对话历史提炼关键信息并生成 Markdown
- * @param {string} topic - 主题名称
- * @param {Array} messages - 对话消息列表
- * @param {string} existingContent - 已有笔记内容（可选）
- * @returns {string} 生成的 Markdown 内容
- */
-function generateMarkdown(topic, messages, existingContent = null) {
-  // 提取问答内容
-  const qaPairs = [];
-  let currentQuestion = null;
-  
-  for (const msg of messages) {
-    if (msg.role === 'user') {
-      currentQuestion = msg.content;
-    } else if (msg.role === 'assistant' && currentQuestion) {
-      qaPairs.push({
-        question: currentQuestion,
-        answer: msg.content
-      });
-      currentQuestion = null;
-    }
-  }
-
-  // 提取代码片段（简单的正则匹配）
-  const codeSnippets = [];
-  const codeRegex = /```[\s\S]*?```/g;
-  for (const qa of qaPairs) {
-    const matches = qa.answer.match(codeRegex);
-    if (matches) {
-      codeSnippets.push(...matches);
-    }
-  }
-
-  // 提取关键概念（简单的关键词提取）
-  const keyConcepts = extractKeyConcepts(qaPairs);
-
-  // 提取易错点（基于关键词）
-  const pitfalls = extractPitfalls(qaPairs);
-
-  // 生成 Markdown
-  let md = `# ${topic}\n\n`;
-  
-  md += `## 核心概念\n\n`;
-  if (keyConcepts.length > 0) {
-    for (const concept of keyConcepts) {
-      md += `- **${concept.name}**：${concept.description}\n`;
-    }
-  } else {
-    md += `- 待补充核心概念\n`;
-  }
-  md += `\n`;
-
-  md += `## 要点总结\n\n`;
-  if (qaPairs.length > 0) {
-    for (let i = 0; i < Math.min(qaPairs.length, 5); i++) {
-      const qa = qaPairs[i];
-      // 简化问题
-      const simplifiedQ = simplifyQuestion(qa.question);
-      // 提取答案要点（取前200字符）
-      const keyPoint = extractKeyPoint(qa.answer);
-      md += `${i + 1}. **${simplifiedQ}**\n   ${keyPoint}\n\n`;
-    }
-  }
-  md += `\n`;
-
-  if (codeSnippets.length > 0) {
-    md += `## 代码示例\n\n`;
-    for (let i = 0; i < Math.min(codeSnippets.length, 3); i++) {
-      md += `### 示例 ${i + 1}\n\n`;
-      md += codeSnippets[i] + '\n\n';
-    }
-  }
-
-  if (pitfalls.length > 0) {
-    md += `## 易错点\n\n`;
-    for (let i = 0; i < pitfalls.length; i++) {
-      md += `${i + 1}. ${pitfalls[i]}\n`;
-    }
-    md += `\n`;
-  }
-
-  md += `## 面试要点\n\n`;
-  md += `- 理解${topic}的基本原理\n`;
-  md += `- 能够结合实际场景分析\n`;
-  md += `- 了解常见问题和优化方案\n`;
-  md += `\n`;
-
-  md += `---\n`;
-  md += `*最后更新：${new Date().toLocaleDateString('zh-CN')}*\n`;
-
-  return md;
 }
 
 /**
@@ -323,17 +218,13 @@ function extractKeyConcepts(qaPairs) {
         const context = qa.answer.substring(start, end).replace(/\n/g, ' ');
         
         if (context.length > 10) {
-          concepts.push({
-            name: keyword,
-            description: context + '...'
-          });
+          concepts.push({ name: keyword, description: context + '...' });
         }
         break;
       }
     }
   }
 
-  // 去重
   return concepts.filter((v, i, a) => a.findIndex(t => t.name === v.name) === i).slice(0, 5);
 }
 
@@ -368,162 +259,491 @@ function extractPitfalls(qaPairs) {
 }
 
 /**
- * 简化问题
- * @param {string} question - 原始问题
- * @returns {string} 简化后的问题
+ * 从对话历史生成 Markdown 摘要
+ * @param {string} topic - 主题名称
+ * @param {Array} messages - 对话消息列表
+ * @returns {string} 生成的 Markdown 内容
  */
-function simplifyQuestion(question) {
-  // 去除命令前缀
-  let simplified = question
-    .replace(/^\/(inter-start|inter-review)\s*/i, '')
-    .replace(/^\/inter-save\s*/i, '')
-    .trim();
+function generateMarkdown(topic, messages) {
+  const qaPairs = [];
+  let currentQuestion = null;
   
-  // 限制长度
-  if (simplified.length > 50) {
-    simplified = simplified.substring(0, 50) + '...';
+  for (const msg of messages) {
+    if (msg.role === 'user') {
+      currentQuestion = msg.content;
+    } else if (msg.role === 'assistant' && currentQuestion) {
+      qaPairs.push({ question: currentQuestion, answer: msg.content });
+      currentQuestion = null;
+    }
   }
+
+  const codeSnippets = [];
+  const codeRegex = /```[\s\S]*?```/g;
+  for (const qa of qaPairs) {
+    const matches = qa.answer.match(codeRegex);
+    if (matches) codeSnippets.push(...matches);
+  }
+
+  const keyConcepts = extractKeyConcepts(qaPairs);
+  const pitfalls = extractPitfalls(qaPairs);
+
+  let md = `# ${topic}\n\n`;
   
-  return simplified || '相关问题';
+  md += `## 核心概念\n\n`;
+  if (keyConcepts.length > 0) {
+    for (const concept of keyConcepts) {
+      md += `- **${concept.name}**：${concept.description}\n`;
+    }
+  } else {
+    md += `- 待补充核心概念\n`;
+  }
+  md += `\n`;
+
+  md += `## 要点总结\n\n`;
+  if (qaPairs.length > 0) {
+    for (let i = 0; i < Math.min(qaPairs.length, 5); i++) {
+      const qa = qaPairs[i];
+      const simplifiedQ = qa.question
+        .replace(/^\/(inter-start|inter-review)\s*/i, '')
+        .replace(/^\/inter-save\s*/i, '')
+        .trim();
+      const displayQ = simplifiedQ.length > 50 ? simplifiedQ.substring(0, 50) + '...' : simplifiedQ;
+      
+      let clean = qa.answer.replace(/```[\s\S]*?```/g, '[代码]').trim();
+      const firstPara = clean.split(/\n\n/)[0];
+      const keyPoint = firstPara.length > 150 ? firstPara.substring(0, 150) + '...' : firstPara;
+      
+      md += `${i + 1}. **${displayQ || '相关问题'}**\n   ${keyPoint}\n\n`;
+    }
+  }
+  md += `\n`;
+
+  if (codeSnippets.length > 0) {
+    md += `## 代码示例\n\n`;
+    for (let i = 0; i < Math.min(codeSnippets.length, 3); i++) {
+      md += `### 示例 ${i + 1}\n\n`;
+      md += codeSnippets[i] + '\n\n';
+    }
+  }
+
+  if (pitfalls.length > 0) {
+    md += `## 易错点\n\n`;
+    for (let i = 0; i < pitfalls.length; i++) {
+      md += `${i + 1}. ${pitfalls[i]}\n`;
+    }
+    md += `\n`;
+  }
+
+  md += `## 面试要点\n\n`;
+  md += `- 理解${topic}的基本原理\n`;
+  md += `- 能够结合实际场景分析\n`;
+  md += `- 了解常见问题和优化方案\n`;
+  md += `\n`;
+
+  md += `---\n`;
+  md += `*最后更新：${new Date().toLocaleDateString('zh-CN')}*\n`;
+
+  return md;
 }
 
 /**
- * 提取答案要点
- * @param {string} answer - 答案内容
- * @returns {string} 要点
- */
-function extractKeyPoint(answer) {
-  // 去除代码块
-  let clean = answer.replace(/```[\s\S]*?```/g, '[代码]').trim();
-  
-  // 取第一段
-  const firstPara = clean.split(/\n\n/)[0];
-  
-  // 限制长度
-  if (firstPara.length > 150) {
-    return firstPara.substring(0, 150) + '...';
-  }
-  
-  return firstPara;
-}
-
-/**
- * 处理保存命令
+ * 处理 /inter-summary 命令
+ * 从对话历史生成摘要并保存到临时文件
  * @param {string} sessionId - 会话 ID
- * @param {Array} sessionHistory - 会话历史（外部传入的完整历史）
  * @returns {Promise<Object>} 响应对象
  */
-async function saveNotes(sessionId, sessionHistory = null) {
-  // 检查配置
-  const configCheck = checkConfig();
-  if (!configCheck.valid) {
-    return {
-      success: false,
-      message: configCheck.message
-    };
-  }
-
+async function summaryNotes(sessionId) {
   const session = sessions.get(sessionId);
   
-  if (!session && !sessionHistory) {
+  if (!session) {
     return {
       success: false,
       message: '没有正在进行的讨论，请先使用 "/inter-start <主题>" 开始讨论'
     };
   }
 
-  const topic = session?.topic || '未命名主题';
-  const messages = sessionHistory || session?.messages || [];
+  const topic = session.topic;
+  const messages = session.messages || [];
   
   if (messages.length === 0) {
     return {
       success: false,
-      message: '当前主题没有讨论内容，无法保存'
+      message: '当前主题没有讨论内容，无法生成摘要'
     };
   }
 
   try {
-    // 设置环境变量供 github-notes 使用
+    // 生成 Markdown
+    const markdown = generateMarkdown(topic, messages);
+    
+    // 保存到临时文件
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    const tmpDir = '/tmp/interview-helper';
+    if (!fs.existsSync(tmpDir)) {
+      fs.mkdirSync(tmpDir, { recursive: true });
+    }
+    
+    const tmpFile = path.join(tmpDir, `${topicToFilename(topic)}-${timestamp}.md`);
+    fs.writeFileSync(tmpFile, markdown, 'utf-8');
+    
+    // 统计信息
+    const stats = {
+      concepts: (markdown.match(/## 核心概念[\s\S]*?(?=##)/) || [''])[0].split('\n-').length - 1,
+      keyPoints: (markdown.match(/## 要点总结[\s\S]*?(?=##)/) || [''])[0].split(/^\d+\./gm).length - 1,
+      codeBlocks: (markdown.match(/```[\s\S]*?```/g) || []).length,
+      pitfalls: (markdown.match(/## 易错点[\s\S]*?(?=##)/) || [''])[0].split(/^\d+\./gm).length - 1
+    };
+
+    return {
+      success: true,
+      message: `📝 摘要已生成并保存到临时文件\n\n` +
+                `📄 文件路径：${tmpFile}\n` +
+                `📊 统计信息：\n` +
+                `  - 核心概念：${stats.concepts} 个\n` +
+                `  - 要点总结：${stats.keyPoints} 条\n` +
+                `  - 代码示例：${stats.codeBlocks} 个\n` +
+                `  - 易错点：${stats.pitfalls} 个\n\n` +
+                `💡 使用 "/inter-save ${tmpFile}" 保存到 GitHub`,
+      tmpFile: tmpFile,
+      content: markdown,
+      stats: stats
+    };
+
+  } catch (error) {
+    return { success: false, message: `生成摘要失败：${error.message}` };
+  }
+}
+
+/**
+ * 解析 Markdown 文档结构
+ * @param {string} content - Markdown 内容
+ * @returns {Object} 解析后的结构
+ */
+function parseMarkdownStructure(content) {
+  const structure = {
+    title: '',
+    sections: {}
+  };
+  
+  const lines = content.split('\n');
+  let currentSection = null;
+  let currentContent = [];
+  
+  for (const line of lines) {
+    // 提取标题
+    if (line.startsWith('# ') && !structure.title) {
+      structure.title = line.substring(2).trim();
+      continue;
+    }
+    
+    // 提取章节
+    const sectionMatch = line.match(/^## (.+)$/);
+    if (sectionMatch) {
+      if (currentSection) {
+        structure.sections[currentSection] = currentContent.join('\n').trim();
+      }
+      currentSection = sectionMatch[1].trim();
+      currentContent = [];
+    } else if (currentSection) {
+      currentContent.push(line);
+    }
+  }
+  
+  if (currentSection) {
+    structure.sections[currentSection] = currentContent.join('\n').trim();
+  }
+  
+  return structure;
+}
+
+/**
+ * 合并两个 Markdown 文档（结构化 Merge）
+ * @param {string} existingContent - 历史文档内容
+ * @param {string} newContent - 新文档内容
+ * @param {string} topic - 主题名称
+ * @returns {string} 合并后的内容
+ */
+function mergeMarkdown(existingContent, newContent, topic) {
+  const existing = parseMarkdownStructure(existingContent);
+  const newDoc = parseMarkdownStructure(newContent);
+  
+  // 合并核心概念（去重）
+  let mergedConcepts = '';
+  const existingConcepts = existing.sections['核心概念'] || '';
+  const newConcepts = newDoc.sections['核心概念'] || '';
+  
+  const conceptSet = new Set();
+  const allConcepts = [];
+  
+  // 提取已有概念
+  const existingMatches = existingConcepts.match(/^- \*\*(.+?)\*\*：(.+)$/gm) || [];
+  for (const match of existingMatches) {
+    const nameMatch = match.match(/^- \*\*(.+?)\*\*/);
+    if (nameMatch) {
+      const name = nameMatch[1];
+      if (!conceptSet.has(name)) {
+        conceptSet.add(name);
+        allConcepts.push(match);
+      }
+    }
+  }
+  
+  // 提取新概念（去重）
+  const newMatches = newConcepts.match(/^- \*\*(.+?)\*\*：(.+)$/gm) || [];
+  for (const match of newMatches) {
+    const nameMatch = match.match(/^- \*\*(.+?)\*\*/);
+    if (nameMatch) {
+      const name = nameMatch[1];
+      if (!conceptSet.has(name)) {
+        conceptSet.add(name);
+        allConcepts.push(match);
+      }
+    }
+  }
+  
+  mergedConcepts = allConcepts.join('\n') || '- 待补充核心概念';
+  
+  // 合并要点总结（追加，重新编号）
+  let mergedKeyPoints = '';
+  const existingPoints = existing.sections['要点总结'] || '';
+  const newPoints = newDoc.sections['要点总结'] || '';
+  
+  const allPoints = [];
+  const existingPointMatches = existingPoints.match(/^\d+\. \*\*(.+?)\*\*[\s\S]*?(?=^\d+\.|$)/gm) || [];
+  const newPointMatches = newPoints.match(/^\d+\. \*\*(.+?)\*\*[\s\S]*?(?=^\d+\.|$)/gm) || [];
+  
+  // 去重：基于问题标题
+  const pointSet = new Set();
+  for (const point of existingPointMatches) {
+    const titleMatch = point.match(/^\d+\. \*\*(.+?)\*\*/);
+    if (titleMatch) {
+      const title = titleMatch[1];
+      if (!pointSet.has(title)) {
+        pointSet.add(title);
+        allPoints.push(point.replace(/^\d+\./, ''));
+      }
+    }
+  }
+  
+  for (const point of newPointMatches) {
+    const titleMatch = point.match(/^\d+\. \*\*(.+?)\*\*/);
+    if (titleMatch) {
+      const title = titleMatch[1];
+      if (!pointSet.has(title)) {
+        pointSet.add(title);
+        allPoints.push(point.replace(/^\d+\./, ''));
+      }
+    }
+  }
+  
+  mergedKeyPoints = allPoints.map((p, i) => `${i + 1}.${p}`).join('\n\n');
+  
+  // 合并代码示例（追加）
+  let mergedCode = '';
+  const existingCode = existing.sections['代码示例'] || '';
+  const newCode = newDoc.sections['代码示例'] || '';
+  
+  const existingBlocks = existingCode.match(/### 示例 \d+[\s\S]*?(?=### 示例 \d+|\n*$)/g) || [];
+  const newBlocks = newCode.match(/### 示例 \d+[\s\S]*?(?=### 示例 \d+|\n*$)/g) || [];
+  
+  const allBlocks = [...existingBlocks, ...newBlocks];
+  mergedCode = allBlocks.map((b, i) => b.replace(/### 示例 \d+/, `### 示例 ${i + 1}`)).join('\n\n');
+  
+  // 合并易错点（去重）
+  let mergedPitfalls = '';
+  const existingPitfalls = existing.sections['易错点'] || '';
+  const newPitfalls = newDoc.sections['易错点'] || '';
+  
+  const pitfallSet = new Set();
+  const allPitfalls = [];
+  
+  const existingPitfallMatches = existingPitfalls.match(/^\d+\. (.+)$/gm) || [];
+  const newPitfallMatches = newPitfalls.match(/^\d+\. (.+)$/gm) || [];
+  
+  for (const p of existingPitfallMatches) {
+    const content = p.replace(/^\d+\. /, '');
+    if (!pitfallSet.has(content)) {
+      pitfallSet.add(content);
+      allPitfalls.push(content);
+    }
+  }
+  
+  for (const p of newPitfallMatches) {
+    const content = p.replace(/^\d+\. /, '');
+    if (!pitfallSet.has(content)) {
+      pitfallSet.add(content);
+      allPitfalls.push(content);
+    }
+  }
+  
+  mergedPitfalls = allPitfalls.map((p, i) => `${i + 1}. ${p}`).join('\n');
+  
+  // 组装最终文档
+  let merged = `# ${topic}\n\n`;
+  merged += `## 核心概念\n\n${mergedConcepts}\n\n`;
+  merged += `## 要点总结\n\n${mergedKeyPoints}\n\n`;
+  
+  if (mergedCode) {
+    merged += `## 代码示例\n\n${mergedCode}\n\n`;
+  }
+  
+  if (mergedPitfalls) {
+    merged += `## 易错点\n\n${mergedPitfalls}\n\n`;
+  }
+  
+  merged += `## 面试要点\n\n`;
+  merged += `- 理解${topic}的基本原理\n`;
+  merged += `- 能够结合实际场景分析\n`;
+  merged += `- 了解常见问题和优化方案\n\n`;
+  merged += `---\n`;
+  merged += `*最后更新：${new Date().toLocaleDateString('zh-CN')}*\n`;
+  
+  return merged;
+}
+
+/**
+ * 自检内容
+ * @param {string} topic - 主题名称
+ * @param {string} content - 笔记内容
+ * @returns {Object} 自检结果
+ */
+function selfReviewContent(topic, content) {
+  const issues = [];
+  
+  if (!content || content.trim().length < 100) {
+    issues.push({ severity: '严重', issue: '内容过短，可能缺少实质内容' });
+  }
+  
+  if (!content.includes('## 核心概念')) {
+    issues.push({ severity: '警告', issue: '缺少核心概念部分' });
+  }
+  
+  if (content.includes('待补充') || content.includes('TODO')) {
+    issues.push({ severity: '建议', issue: '存在待补充内容标记' });
+  }
+  
+  const codeBlockMatches = content.match(/```/g);
+  if (codeBlockMatches && codeBlockMatches.length % 2 !== 0) {
+    issues.push({ severity: '严重', issue: '代码块格式不完整（可能缺少闭合）' });
+  }
+  
+  const criticalCount = issues.filter(i => i.severity === '严重').length;
+  const warningCount = issues.filter(i => i.severity === '警告').length;
+  const suggestionCount = issues.filter(i => i.severity === '建议').length;
+  
+  let summary = '';
+  if (criticalCount === 0 && warningCount === 0 && suggestionCount === 0) {
+    summary = '✅ 基础检查通过';
+  } else {
+    const parts = [];
+    if (criticalCount > 0) parts.push(`${criticalCount}个严重问题`);
+    if (warningCount > 0) parts.push(`${warningCount}个警告`);
+    if (suggestionCount > 0) parts.push(`${suggestionCount}个建议`);
+    summary = `⚠️ 发现 ${parts.join('、')}`;
+  }
+  
+  return { summary, issues };
+}
+
+/**
+ * 处理 /inter-save 命令
+ * 读取文件、检测历史、merge、自检、PR 流程
+ * @param {string} filePath - 要保存的文件路径（临时文件）
+ * @param {string} topic - 主题名称（可选，从文件名推断）
+ * @returns {Promise<Object>} 响应对象
+ */
+async function saveNotes(filePath, topic = null) {
+  const configCheck = checkConfig();
+  if (!configCheck.valid) {
+    return { success: false, message: configCheck.message };
+  }
+
+  if (!filePath || !fs.existsSync(filePath)) {
+    return {
+      success: false,
+      message: '请提供有效的文件路径，例如：/inter-save /tmp/interview-helper/redis-xxx.md'
+    };
+  }
+
+  try {
+    // 1. 读取临时文件
+    const newContent = fs.readFileSync(filePath, 'utf-8');
+    
+    // 从内容或文件名推断主题
+    const parsed = parseMarkdownStructure(newContent);
+    const inferredTopic = topic || parsed.title || path.basename(filePath, '.md').replace(/-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}$/, '');
+    
+    // 设置环境变量
     process.env.GITHUB_TOKEN = config.token;
     process.env.GITHUB_REPO = config.repoUrl.replace('https://github.com/', '');
     process.env.GITHUB_USERNAME = config.repoUrl.split('/')[3];
     process.env.GITHUB_AUTHOR_NAME = 'xcm_kimi_claw';
 
-    // 1. ensureRepo 确保本地仓库存在
+    // 2. 确保仓库存在并拉取最新代码
     await git.ensureRepo(config.localPath, config.repoUrl, config.token);
-    
-    // 2. pull 最新代码
     await git.pull(config.localPath);
     
-    // 3. 检查文件是否存在（本地）
-    const filePath = getFilePath(topic);
-    const exists = await git.fileExists(config.localPath, filePath);
+    // 3. 检测历史文件是否存在
+    const targetFilePath = getFilePath(inferredTopic);
+    const exists = await git.fileExists(config.localPath, targetFilePath);
     
-    // 4. 获取已有内容（如果是更新）
-    let existingContent = null;
+    let finalContent = newContent;
+    let mergeInfo = '';
+    
+    // 4. 如果存在则 merge
     if (exists) {
-      existingContent = await git.readFile(config.localPath, filePath);
+      const existingContent = await git.readFile(config.localPath, targetFilePath);
+      finalContent = mergeMarkdown(existingContent, newContent, inferredTopic);
+      mergeInfo = '\n🔄 已自动合并历史内容';
     }
 
-    // 5. 生成 Markdown
-    const markdown = generateMarkdown(topic, messages, existingContent);
+    // 5. 自检内容
+    const selfReviewResult = selfReviewContent(inferredTopic, finalContent);
 
-    // 6. 使用 review 逻辑自检内容
-    const selfReviewResult = await selfReviewContent(topic, markdown);
-
-    // 7. 创建临时分支（本地）
+    // 6. PR 流程
     const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const branchName = `note-${topicToFilename(topic)}-${timestamp}`;
+    const branchName = `note-${topicToFilename(inferredTopic)}-${timestamp}-${Date.now()}`;
+    
     await git.createBranch(config.localPath, branchName, 'main');
     await git.checkout(config.localPath, branchName);
-
-    // 8. 写入文件（本地）
-    await git.writeFile(config.localPath, filePath, markdown);
-
-    // 9. commit（本地）
+    await git.writeFile(config.localPath, targetFilePath, finalContent);
+    
     const commitMessage = exists 
-      ? `Update: ${topic} - ${new Date().toLocaleDateString('zh-CN')}`
-      : `Add: ${topic} - ${new Date().toLocaleDateString('zh-CN')}`;
-    await git.commit(config.localPath, commitMessage, [filePath]);
-
-    // 10. push 到远程临时分支
+      ? `Update: ${inferredTopic} - ${new Date().toLocaleDateString('zh-CN')}`
+      : `Add: ${inferredTopic} - ${new Date().toLocaleDateString('zh-CN')}`;
+    await git.commit(config.localPath, commitMessage, [targetFilePath]);
     await git.push(config.localPath, branchName);
-
-    // 11. 切回 main 分支
     await git.checkout(config.localPath, 'main');
 
-    // 12. 创建 PR（使用 github-notes）
-    const prTitle = `${exists ? 'Update' : 'Add'}：${topic}-${new Date().toLocaleDateString('zh-CN').replace(/\//g, '')}`;
-    const prBody = `## ${exists ? '更新' : '添加'}笔记：${topic}\n\n` +
+    // 创建 PR
+    const prTitle = `${exists ? 'Update' : 'Add'}：${inferredTopic}`;
+    const prBody = `## ${exists ? '更新' : '添加'}笔记：${inferredTopic}\n\n` +
                    `### 变更内容\n` +
-                   `- ${exists ? '更新' : '新增'} ${filePath}\n` +
-                   `- 基于 ${messages.length} 条对话记录整理\n\n` +
+                   `- ${exists ? '更新' : '新增'} ${targetFilePath}${mergeInfo}\n\n` +
                    `### 自检结果\n` +
                    `${selfReviewResult.summary}\n\n` +
                    `### 笔记摘要\n` +
-                   `- 主题：${topic}\n` +
-                   `- 分类：${getTopicCategory(topic)}\n` +
+                   `- 主题：${inferredTopic}\n` +
+                   `- 分类：${getTopicCategory(inferredTopic)}\n` +
                    `- 时间：${new Date().toLocaleString('zh-CN')}`;
     
     const pr = await github.createPullRequest(branchName, prTitle, prBody);
 
-    // 13. 清理会话
-    sessions.delete(sessionId);
-
     return {
       success: true,
-      message: `✅ 笔记已保存并创建 PR\n\n📄 文件：${filePath}\n📝 操作：${exists ? '更新' : '新增'}\n🔍 自检：${selfReviewResult.summary}\n🔗 PR: ${pr?.html_url || '创建成功'}`,
-      filePath: filePath,
+      message: `✅ 笔记已保存并创建 PR\n\n` +
+                `📄 文件：${targetFilePath}${mergeInfo}\n` +
+                `📝 操作：${exists ? '更新' : '新增'}\n` +
+                `🔍 自检：${selfReviewResult.summary}\n` +
+                `🔗 PR: ${pr?.html_url || '创建成功'}`,
+      filePath: targetFilePath,
       isUpdate: exists,
       prUrl: pr?.html_url,
       selfReview: selfReviewResult
     };
 
   } catch (error) {
-    return {
-      success: false,
-      message: `保存失败：${error.message}`
-    };
+    return { success: false, message: `保存失败：${error.message}` };
   }
 }
 
@@ -565,13 +785,9 @@ const REVIEWER_PROMPT = `你是一名资深技术专家，拥有10年以上后�
  * @returns {Promise<Object>} 响应对象
  */
 async function reviewNotes(topic) {
-  // 检查配置
   const configCheck = checkConfig();
   if (!configCheck.valid) {
-    return {
-      success: false,
-      message: configCheck.message
-    };
+    return { success: false, message: configCheck.message };
   }
 
   if (!topic || topic.trim() === '') {
@@ -582,7 +798,6 @@ async function reviewNotes(topic) {
   }
 
   try {
-    // 确保仓库存在并拉取最新内容
     await git.ensureRepo(config.localPath, config.repoUrl, config.token);
     await git.pull(config.localPath);
     
@@ -605,80 +820,19 @@ async function reviewNotes(topic) {
     };
 
   } catch (error) {
-    return {
-      success: false,
-      message: `读取笔记失败：${error.message}`
-    };
+    return { success: false, message: `读取笔记失败：${error.message}` };
   }
 }
 
 /**
- * 自检生成的笔记内容
- * @param {string} topic - 主题名称
- * @param {string} content - 笔记内容
- * @returns {Promise<Object>} 自检结果
- */
-async function selfReviewContent(topic, content) {
-  // 基础自检：检查常见错误模式
-  const issues = [];
-  
-  // 检查空内容
-  if (!content || content.trim().length < 100) {
-    issues.push({ severity: '严重', issue: '内容过短，可能缺少实质内容' });
-  }
-  
-  // 检查是否有核心概念部分
-  if (!content.includes('## 核心概念')) {
-    issues.push({ severity: '警告', issue: '缺少核心概念部分' });
-  }
-  
-  // 检查是否有占位符
-  if (content.includes('待补充') || content.includes('TODO')) {
-    issues.push({ severity: '建议', issue: '存在待补充内容标记' });
-  }
-  
-  // 检查代码块格式
-  const codeBlockMatches = content.match(/```/g);
-  if (codeBlockMatches && codeBlockMatches.length % 2 !== 0) {
-    issues.push({ severity: '严重', issue: '代码块格式不完整（可能缺少闭合）' });
-  }
-  
-  // 生成自检摘要
-  const criticalCount = issues.filter(i => i.severity === '严重').length;
-  const warningCount = issues.filter(i => i.severity === '警告').length;
-  const suggestionCount = issues.filter(i => i.severity === '建议').length;
-  
-  let summary = '';
-  if (criticalCount === 0 && warningCount === 0 && suggestionCount === 0) {
-    summary = '✅ 基础检查通过';
-  } else {
-    const parts = [];
-    if (criticalCount > 0) parts.push(`${criticalCount}个严重问题`);
-    if (warningCount > 0) parts.push(`${warningCount}个警告`);
-    if (suggestionCount > 0) parts.push(`${suggestionCount}个建议`);
-    summary = `⚠️ 发现 ${parts.join('、')}`;
-  }
-  
-  return {
-    summary,
-    issues,
-    reviewPrompt: REVIEWER_PROMPT + '\n\n' + content
-  };
-}
-
-/**
- * 处理 /search 命令 - 搜索主题和内容
+ * 处理 /search 命令
  * @param {string} keyword - 搜索关键词
  * @returns {Promise<Object>} 响应对象
  */
 async function searchNotes(keyword) {
-  // 检查配置
   const configCheck = checkConfig();
   if (!configCheck.valid) {
-    return {
-      success: false,
-      message: configCheck.message
-    };
+    return { success: false, message: configCheck.message };
   }
 
   if (!keyword || keyword.trim() === '') {
@@ -689,7 +843,6 @@ async function searchNotes(keyword) {
   }
 
   try {
-    // 确保仓库存在并拉取最新内容
     await git.ensureRepo(config.localPath, config.repoUrl, config.token);
     await git.pull(config.localPath);
     
@@ -703,7 +856,6 @@ async function searchNotes(keyword) {
       };
     }
 
-    // 搜索结果
     const results = [];
     
     for (const file of files) {
@@ -711,13 +863,10 @@ async function searchNotes(keyword) {
       const content = await git.readFile(config.localPath, file);
       const contentLower = (content || '').toLowerCase();
       
-      // 检查文件名匹配
       const nameMatch = filename.includes(searchTerm);
-      // 检查内容匹配
       const contentMatch = contentLower.includes(searchTerm);
       
       if (nameMatch || contentMatch) {
-        // 提取匹配片段
         let snippet = '';
         if (contentMatch && content) {
           const idx = contentLower.indexOf(searchTerm);
@@ -739,7 +888,6 @@ async function searchNotes(keyword) {
       }
     }
     
-    // 排序：文件名匹配优先
     results.sort((a, b) => {
       if (a.nameMatch && !b.nameMatch) return -1;
       if (!a.nameMatch && b.nameMatch) return 1;
@@ -757,12 +905,9 @@ async function searchNotes(keyword) {
 
     let message = `🔍 搜索 "${keyword}" 的结果（共 ${results.length} 条）：\n\n`;
     
-    // 按分类分组
     const groups = {};
     for (const r of results) {
-      if (!groups[r.category]) {
-        groups[r.category] = [];
-      }
+      if (!groups[r.category]) groups[r.category] = [];
       groups[r.category].push(r);
     }
     
@@ -771,9 +916,7 @@ async function searchNotes(keyword) {
       for (const item of items) {
         const matchType = item.nameMatch ? '📄' : '📝';
         message += `  ${matchType} ${item.filename}`;
-        if (item.snippet) {
-          message += `\n     ${item.snippet}`;
-        }
+        if (item.snippet) message += `\n     ${item.snippet}`;
         message += '\n';
       }
       message += '\n';
@@ -781,37 +924,24 @@ async function searchNotes(keyword) {
     
     message += `💡 使用 "/inter-review <主题>" 查看完整内容`;
 
-    return {
-      success: true,
-      message: message,
-      keyword: keyword,
-      results: results
-    };
+    return { success: true, message, keyword, results };
 
   } catch (error) {
-    return {
-      success: false,
-      message: `搜索失败：${error.message}`
-    };
+    return { success: false, message: `搜索失败：${error.message}` };
   }
 }
 
 /**
- * 处理 /list 命令 - 列出所有主题（保留向后兼容）
+ * 处理 /list 命令
  * @returns {Promise<Object>} 响应对象
  */
 async function listTopics() {
-  // 检查配置
   const configCheck = checkConfig();
   if (!configCheck.valid) {
-    return {
-      success: false,
-      message: configCheck.message
-    };
+    return { success: false, message: configCheck.message };
   }
 
   try {
-    // 确保仓库存在并拉取最新内容
     await git.ensureRepo(config.localPath, config.repoUrl, config.token);
     await git.pull(config.localPath);
     
@@ -824,14 +954,10 @@ async function listTopics() {
       };
     }
 
-    // 按目录分组
     const groups = {};
     for (const file of files) {
       const dir = file.split('/')[0];
-      if (!groups[dir]) {
-        groups[dir] = [];
-      }
-      // 提取文件名（不含扩展名）
+      if (!groups[dir]) groups[dir] = [];
       const filename = file.split('/').pop().replace('.md', '');
       groups[dir].push(filename);
     }
@@ -849,7 +975,7 @@ async function listTopics() {
 
     return {
       success: true,
-      message: message,
+      message,
       topics: files.map(f => ({
         name: f.split('/').pop().replace('.md', ''),
         path: f,
@@ -858,41 +984,20 @@ async function listTopics() {
     };
 
   } catch (error) {
-    return {
-      success: false,
-      message: `列出主题失败：${error.message}`
-    };
+    return { success: false, message: `列出主题失败：${error.message}` };
   }
-}
-
-/**
- * 获取当前会话信息
- * @param {string} sessionId - 会话 ID
- * @returns {Object|null} 会话信息
- */
-function getSession(sessionId) {
-  return sessions.get(sessionId) || null;
-}
-
-/**
- * 清理会话
- * @param {string} sessionId - 会话 ID
- */
-function clearSession(sessionId) {
-  sessions.delete(sessionId);
 }
 
 module.exports = {
   startInterview,
+  summaryNotes,
   saveNotes,
   reviewNotes,
   listTopics,
   searchNotes,
   addMessage,
-  getSession,
-  clearSession,
+  getSession: (sessionId) => sessions.get(sessionId) || null,
+  clearSession: (sessionId) => sessions.delete(sessionId),
   getFilePath,
-  getTopicCategory,
-  generateMarkdown,
-  selfReviewContent
+  getTopicCategory
 };

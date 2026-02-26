@@ -4,13 +4,14 @@
 
 ## 配置
 
-需要配置 github-notes 的环境变量：
+需要配置 git-repo-manager 的 `config.json`：
 
-```bash
-export GITHUB_TOKEN="ghp_xxxxxxxx"
-export GITHUB_REPO="wzxch/xcm-interview-notes"
-export GITHUB_USERNAME="wzxch"
-export GITHUB_AUTHOR_NAME="xcm_kimi_claw"
+```json
+{
+  "repoUrl": "https://github.com/wzxch/xcm-interview-notes",
+  "localPath": "/root/.openclaw/workspace/repos/xcm-interview-notes",
+  "token": "ghp_xxxxxxxx"
+}
 ```
 
 ## 命令列表
@@ -25,37 +26,79 @@ export GITHUB_AUTHOR_NAME="xcm_kimi_claw"
 
 系统会自动检查是否已有该主题的笔记，如果有会提示查看。
 
-### /inter-save
-在讨论结束后，输入"/inter-save"将当前主题的内容整理成笔记。
+### /inter-summary
+在讨论结束后，生成当前主题的内容摘要并保存到临时文件。
 
 流程：
 1. 从对话历史中提取当前主题的讨论
 2. 提炼关键信息（核心概念、代码片段、易错点）
 3. 去口语化，生成结构化 Markdown
-4. **自动自检**：使用技术专家视角审查内容，检查技术准确性、表述严谨性等
-5. 创建临时分支并推送
-6. 创建 Pull Request
-7. 返回 PR 链接
+4. 保存到临时文件
+5. 返回文件路径和统计信息
 
-自检结果会显示在 PR 描述中，帮助发现潜在问题。
+示例输出：
+```
+📝 摘要已生成并保存到临时文件
+
+📄 文件路径：/tmp/interview-helper/jvm-gc-2025-02-26-10-30-00.md
+📊 统计信息：
+  - 核心概念：3 个
+  - 要点总结：4 条
+  - 代码示例：2 个
+  - 易错点：1 个
+
+💡 使用 "/inter-save /tmp/interview-helper/jvm-gc-2025-02-26-10-30-00.md" 保存到 GitHub
+```
+
+### /inter-save <文件路径>
+将指定文件保存到 GitHub，支持自动合并历史内容。
+
+流程：
+1. 读取指定文件内容
+2. 检测历史文件是否存在
+   - 不存在 → 直接保存新文件
+   - 存在 → 进入 merge 流程
+3. **Merge 策略**（结构化合并）：
+   - 核心概念：去重合并
+   - 要点总结：追加新要点，重新编号
+   - 代码示例：追加
+   - 易错点：去重合并
+4. **自检内容**：检查内容长度、核心概念、代码块格式等
+5. **PR 流程**：创建临时分支 → commit → push → 创建 PR
+
+示例：
+```
+/inter-save /tmp/interview-helper/redis-2025-02-26-10-30-00.md
+```
+
+输出示例（新增）：
+```
+✅ 笔记已保存并创建 PR
+
+📄 文件：redis/redis.md
+📝 操作：新增
+🔍 自检：✅ 基础检查通过
+🔗 PR: https://github.com/wzxch/xcm-interview-notes/pull/6
+```
+
+输出示例（更新，自动合并）：
+```
+✅ 笔记已保存并创建 PR
+
+📄 文件：redis/redis.md
+🔄 已自动合并历史内容
+📝 操作：更新
+🔍 自检：✅ 基础检查通过
+🔗 PR: https://github.com/wzxch/xcm-interview-notes/pull/7
+```
 
 ### /inter-review <主题>
-查看已有主题的笔记内容，并以技术专家视角进行严格审查。
+查看已有主题的笔记内容。
 
 示例：
 ```
 /inter-review JVM垃圾回收
 ```
-
-系统会：
-1. 拉取最新仓库内容
-2. 读取指定主题的笔记
-3. 提供技术专家 Review 提示词，帮助发现：
-   - 技术准确性错误
-   - 表述不严谨之处
-   - 遗漏的关键细节
-   - 过时的内容
-   - 常见误区
 
 ### /inter-search <关键词>
 搜索笔记，支持按主题名和内容搜索。
@@ -66,13 +109,32 @@ export GITHUB_AUTHOR_NAME="xcm_kimi_claw"
 /inter-search G1
 ```
 
-搜索结果：
-- 📄 表示主题名匹配
-- 📝 表示内容匹配
-- 显示匹配内容的上下文片段
-
 ### /inter-list
-列出所有已保存的主题（向后兼容，建议使用 /inter-search）。
+列出所有已保存的主题。
+
+## 完整使用流程
+
+### 场景 1：新主题学习
+```
+/inter-start Redis持久化
+...进行多轮问答讨论...
+/inter-summary                    → 生成摘要，获取临时文件路径
+/inter-save /tmp/.../redis-xxx.md → 保存到 GitHub（新增）
+```
+
+### 场景 2：补充已有主题
+```
+/inter-start Redis持久化          → 系统提示已有笔记
+...进行补充讨论...
+/inter-summary                    → 生成新摘要
+/inter-save /tmp/.../redis-xxx.md → 自动合并历史内容，创建 PR
+```
+
+### 场景 3：直接编辑已有文件
+```
+# 用户直接编辑文件后
+/inter-save /path/to/edited-file.md → 自动检测并合并
+```
 
 ## 文件结构
 
@@ -95,42 +157,6 @@ xcm-interview-notes/
 - Redis 相关 → `redis/`
 - 其他 → `misc/`
 
-## 使用示例
-
-### 完整学习流程
-
-1. **开始讨论**
-   ```
-   /inter-start Redis持久化
-   ```
-
-2. **进行问答讨论**（多轮对话）
-
-3. **保存笔记**
-   ```
-   /inter-save
-   ```
-   系统会返回 PR 链接和自检结果，如：
-   ```
-   ✅ 笔记已保存并创建 PR
-   
-   📄 文件：redis/redis-persistence.md
-   📝 操作：新增
-   🔍 自检：✅ 基础检查通过
-   🔗 PR: https://github.com/wzxch/xcm-interview-notes/pull/5
-   ```
-
-4. **专家审查**
-   ```
-   /inter-review Redis持久化
-   ```
-   系统会拉取最新内容，并提供 Review 提示词帮助审查。
-
-5. **搜索复习**
-   ```
-   /inter-search 持久化
-   ```
-
 ## 笔记格式
 
 自动生成的笔记包含以下结构：
@@ -139,11 +165,14 @@ xcm-interview-notes/
 # 主题名称
 
 ## 核心概念
-- 概念1：说明
-- 概念2：说明
+- **概念1**：说明
+- **概念2**：说明
 
 ## 要点总结
 1. **问题1**
+   答案要点...
+
+2. **问题2**
    答案要点...
 
 ## 代码示例
@@ -162,18 +191,28 @@ xcm-interview-notes/
 - 了解常见问题和优化方案
 
 ---
-*最后更新：2025-02-25*
+*最后更新：2025-02-26*
 ```
+
+## Merge 策略说明
+
+当保存的文件已存在时，系统会自动合并：
+
+| 章节 | 合并策略 | 说明 |
+|:---|:---|:---|
+| 核心概念 | 去重追加 | 相同概念只保留一次，新概念追加到后面 |
+| 要点总结 | 去重追加 | 基于问题标题去重，重新编号 |
+| 代码示例 | 追加 | 直接追加，重新编号 |
+| 易错点 | 去重追加 | 相同易错点只保留一次 |
+| 面试要点 | 保留 | 使用标准模板 |
 
 ## 自检机制
 
 /inter-save 会自动进行以下检查：
 
 | 检查项 | 严重程度 | 说明 |
-|--------|----------|------|
+|:---|:---|:---|
 | 内容长度 | 严重 | 内容过短可能缺少实质内容 |
 | 核心概念部分 | 警告 | 缺少核心概念部分 |
 | 待补充标记 | 建议 | 存在 "待补充" 或 "TODO" 标记 |
 | 代码块格式 | 严重 | 代码块格式不完整 |
-
-同时，系统会生成技术专家 Review 提示词，供进一步人工审查使用。
